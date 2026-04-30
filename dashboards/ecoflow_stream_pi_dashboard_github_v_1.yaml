@@ -1,0 +1,652 @@
+views:
+  - title: Status
+    path: ecoflow-status
+    icon: mdi:view-dashboard
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: entities
+            title: EcoFlow - Live Status
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: input_boolean.ecoflow_unified_controller_enabled
+                name: Controller Enabled
+              - entity: sensor.ecoflow_unified_target_mode
+                name: Current Mode
+              - entity: sensor.ecoflow_unified_charge_gate
+                name: Charge Gate
+              - entity: sensor.ecoflow_unified_soc
+                name: Battery SOC
+              - type: divider
+              - entity: sensor.ecoflow_unified_grid_raw
+                name: Grid Raw
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+              - entity: sensor.ecoflow_unified_error
+                name: Control Error
+              - type: divider
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Power
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Unified Power
+              - entity: sensor.efctrl_current_charge_limit
+                name: Current Charge Limit
+              - entity: sensor.efctrl_current_discharge_limit
+                name: Current Discharge Limit
+
+          - type: entities
+            title: EcoFlow - PI Controller
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_error
+                name: Error
+              - entity: sensor.ecoflow_unified_p_term
+                name: P Term
+              - entity: sensor.ecoflow_unified_i_term
+                name: I Term
+              - entity: sensor.ecoflow_unified_pi_sum
+                name: PI Sum
+              - entity: sensor.ecoflow_unified_pi_sum_stable
+                name: PI Sum After Deadband
+              - type: divider
+              - entity: input_number.ecoflow_unified_kp
+                name: Kp
+              - entity: input_number.ecoflow_unified_ki
+                name: Ki
+              - entity: input_number.ecoflow_unified_integral
+                name: Integral Memory
+              - entity: input_number.ecoflow_unified_integral_limit
+                name: Integral Limit
+              - entity: input_button.ecoflow_unified_integral_reset
+                name: Reset Integral
+
+          - type: entities
+            title: EcoFlow - Operating State
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.efctrl_energy_strategy
+                name: Energy Strategy
+              - entity: sensor.efctrl_backup_reserve
+                name: Backup Reserve
+              - entity: sensor.ecoflow_unified_current_charge
+                name: Current Charge
+              - entity: sensor.ecoflow_unified_current_discharge
+                name: Current Discharge
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Unified Power
+
+          - type: entities
+            title: EcoFlow - EV Status
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_ev_power
+                name: EV Power
+              - entity: sensor.ecoflow_unified_ev_charging
+                name: EV Charging
+              - entity: input_boolean.ecoflow_ev_discharge_800w
+                name: Enable EV Discharge Support
+              - entity: input_number.ecoflow_unified_ev_threshold_w
+                name: EV Detection Threshold
+              - entity: input_number.ecoflow_unified_ev_discharge_power
+                name: EV Support Discharge Power
+              - entity: sensor.ecoflow_unified_ev_support
+                name: EV Support Status
+
+          - type: entities
+            title: EcoFlow - Battery Charge Source Today
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_battery_charge_power_actual
+                name: Battery Charge Power Actual
+              - entity: sensor.ecoflow_battery_charge_from_pv_power
+                name: Charge From PV Now
+              - entity: sensor.ecoflow_battery_charge_from_grid_power
+                name: Charge From Grid Now
+              - type: divider
+              - entity: sensor.ecoflow_battery_charge_from_pv_daily
+                name: Today From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_daily
+                name: Today From Grid
+              - entity: sensor.ecoflow_battery_charge_pv_share_daily
+                name: PV Share Today
+
+  - title: Configuration
+    path: ecoflow-configuration
+    icon: mdi:cog
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: entities
+            title: EcoFlow Unified Controller - Main Parameters
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: input_boolean.ecoflow_unified_controller_enabled
+                name: Controller Enabled
+              - type: divider
+              - entity: input_number.ecoflow_unified_target_grid
+                name: Target Grid
+              - entity: input_number.ecoflow_unified_deadband
+                name: Deadband
+              - type: divider
+              - entity: input_number.ecoflow_unified_kp
+                name: Kp
+              - entity: input_number.ecoflow_unified_ki
+                name: Ki
+              - entity: input_number.ecoflow_unified_integral
+                name: Integral Memory
+              - entity: input_number.ecoflow_unified_integral_limit
+                name: Integral Limit
+              - entity: input_button.ecoflow_unified_integral_reset
+                name: Reset Integral
+
+          - type: markdown
+            title: Recommended Conservative Beta Values
+            content: >
+              **Recommended starting values**
+
+              `Kp = 0.20`  
+              `Ki = 0.002`  
+              `Target Grid = -20 W`  
+              `Deadband = 50 W`  
+              `Integral Limit = 120 W`  
+              `Control interval = 5 s`
+
+              Reset the integral memory after changing controller behavior.
+
+              Start conservative. The goal is stable behavior first, not perfect
+              zero-grid tracking immediately.
+
+          - type: entities
+            title: EcoFlow Unified Controller - Limits
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: input_number.ecoflow_unified_max_discharge
+                name: Max Discharge
+              - entity: input_number.ecoflow_unified_max_charge
+                name: Max Charge
+              - entity: input_number.ecoflow_unified_discharge_step_w
+                name: Discharge Step
+              - entity: input_number.ecoflow_unified_charge_step_w
+                name: Charge Step
+              - entity: input_number.ecoflow_unified_min_discharge_soc
+                name: Min Discharge SOC
+
+          - type: entities
+            title: EcoFlow Charge Gate - PV Charging Permission
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_charge_gate
+                name: Charge Gate Status
+              - entity: input_boolean.ecoflow_unified_charge_allowed
+                name: Charge Allowed
+              - type: divider
+              - entity: input_number.ecoflow_unified_charge_enable_pv_w
+                name: Charge Enable PV
+              - entity: input_number.ecoflow_unified_charge_disable_pv_w
+                name: Charge Disable PV
+              - entity: input_number.ecoflow_unified_charge_enable_export_w
+                name: Charge Enable Export
+              - type: divider
+              - entity: sensor.ecoflow_unified_pv_power
+                name: PV Power
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+
+          - type: entities
+            title: EcoFlow EV - Configuration
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_ev_power
+                name: EV Power
+              - entity: sensor.ecoflow_unified_ev_charging
+                name: EV Charging
+              - entity: input_boolean.ecoflow_ev_discharge_800w
+                name: Enable EV Support
+              - entity: input_number.ecoflow_unified_ev_threshold_w
+                name: EV Detection Threshold
+              - entity: input_number.ecoflow_unified_ev_discharge_power
+                name: EV Discharge Power
+              - entity: sensor.ecoflow_unified_ev_support
+                name: EV Support Status
+
+          - type: entities
+            title: EFCTRL Adapter Entities
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.efctrl_grid_power
+                name: Grid Power Alias
+              - entity: sensor.efctrl_pv_power
+                name: PV Power Alias
+              - entity: sensor.efctrl_battery_soc
+                name: Battery SOC Alias
+              - entity: sensor.efctrl_ev_power
+                name: EV Power Alias
+              - type: divider
+              - entity: sensor.efctrl_current_charge_limit
+                name: Charge Limit Alias
+              - entity: sensor.efctrl_current_discharge_limit
+                name: Discharge Limit Alias
+              - entity: sensor.efctrl_backup_reserve
+                name: Backup Reserve Alias
+              - entity: sensor.efctrl_energy_strategy
+                name: Energy Strategy Alias
+
+          - type: entities
+            title: EFCTRL Actuator Scripts
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: script.efctrl_set_charge_power
+                name: Set Charge Power
+              - entity: script.efctrl_set_discharge_power
+                name: Set Discharge Power
+              - entity: script.efctrl_set_backup_reserve
+                name: Set Backup Reserve
+              - entity: script.efctrl_set_energy_strategy
+                name: Set Energy Strategy
+
+  - title: Calculations
+    path: ecoflow-calculations
+    icon: mdi:calculator
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: entities
+            title: EcoFlow PI - Calculation Values
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_error
+                name: Error
+              - entity: sensor.ecoflow_unified_p_term
+                name: P Term
+              - entity: sensor.ecoflow_unified_i_term
+                name: I Term
+              - entity: sensor.ecoflow_unified_pi_sum
+                name: PI Sum
+              - entity: sensor.ecoflow_unified_pi_sum_stable
+                name: PI Sum Stable
+              - type: divider
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Unified Power
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Unified Power
+              - entity: sensor.ecoflow_unified_target_mode
+                name: Target Mode
+
+          - type: entities
+            title: EcoFlow Grid / PV - Inputs
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_grid_raw
+                name: Grid Raw
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+              - entity: sensor.ecoflow_unified_pv_power
+                name: PV Power
+              - entity: sensor.ecoflow_unified_charge_gate
+                name: Charge Gate
+              - entity: input_boolean.ecoflow_unified_charge_allowed
+                name: Charge Allowed
+
+          - type: entities
+            title: EcoFlow Charge / Discharge - Calculation
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_current_charge
+                name: Current Charge
+              - entity: sensor.ecoflow_unified_current_discharge
+                name: Current Discharge
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Unified Power
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Unified Power
+              - type: divider
+              - entity: sensor.efctrl_current_charge_limit
+                name: EFCTRL Charge Limit
+              - entity: sensor.efctrl_current_discharge_limit
+                name: EFCTRL Discharge Limit
+
+          - type: entities
+            title: EcoFlow Battery Charging - Source Now
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_battery_charge_power_actual
+                name: Battery Charge Power Actual
+              - entity: sensor.ecoflow_battery_charge_from_pv_power
+                name: Charge From PV Now
+              - entity: sensor.ecoflow_battery_charge_from_grid_power
+                name: Charge From Grid Now
+              - type: divider
+              - entity: sensor.ecoflow_unified_grid_raw
+                name: Grid Raw
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+              - entity: sensor.ecoflow_unified_pv_power
+                name: PV Power
+
+          - type: entities
+            title: EcoFlow Battery Charging - Energy Counters
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_battery_charge_from_pv_energy
+                name: Total From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_energy
+                name: Total From Grid
+              - type: divider
+              - entity: sensor.ecoflow_battery_charge_from_pv_daily
+                name: Today From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_daily
+                name: Today From Grid
+              - entity: sensor.ecoflow_battery_charge_pv_share_daily
+                name: PV Share Today
+              - type: divider
+              - entity: sensor.ecoflow_battery_charge_from_pv_monthly
+                name: Month From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_monthly
+                name: Month From Grid
+              - entity: sensor.ecoflow_battery_charge_pv_share_monthly
+                name: PV Share Month
+
+          - type: markdown
+            title: EcoFlow Unified Controller - Logic
+            content: >
+              **Sign convention**
+
+              `Grid > 0 W` = grid import  
+              `Grid < 0 W` = grid export / feed-in
+
+              `Target Power > 0 W` = battery discharge  
+              `Target Power < 0 W` = battery charge  
+              `Target Power = 0 W` = idle / deadband
+
+              **PI controller**
+
+              `Error = Grid Smoothed - Target Grid`
+
+              `P-Term = Kp * Error`
+
+              `I-Term = stored integral value`
+
+              `Target Power = Current Unified Power + P-Term + I-Term`
+
+              This is an incremental controller. It starts from the current
+              EcoFlow output and corrects the value every 5 seconds.
+
+              **Anti-windup**
+
+              The I term is limited and frozen when the EcoFlow is already at
+              the charge or discharge actuator limit and the error would push
+              further into the same saturated direction.
+
+              **Charge gate**
+
+              `allowed` = charging allowed  
+              `blocked` = charging blocked, discharging remains allowed
+
+              Enable condition:
+
+              `PV > Charge Enable PV` and `Grid Smoothed < -Charge Enable Export`
+              for 60 seconds.
+
+              Disable condition:
+
+              `PV < Charge Disable PV` for 60 seconds.
+
+              **Safety**
+
+              Controller disabled:
+
+              `Charge Power = 0 W`  
+              `Discharge Power = 0 W`  
+              `Integral = 0 W`
+
+              Charge gate blocked:
+
+              `Charge Power = 0 W`  
+              `Integral = 0 W`  
+              Discharge is not automatically stopped.
+
+              **EV logic**
+
+              EV not charging: normal PI control.  
+              EV charging and support disabled: EcoFlow forced to 0 W.  
+              EV charging and support enabled: EcoFlow discharges at configured
+              EV support power.
+
+  - title: Graphs
+    path: ecoflow-graphs
+    icon: mdi:chart-line
+    type: panel
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: history-graph
+            title: Unified Control - Grid / Target
+            hours_to_show: 2
+            refresh_interval: 5
+            entities:
+              - entity: sensor.ecoflow_unified_grid_raw
+                name: Grid Raw
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+              - entity: sensor.ecoflow_unified_error
+                name: Error
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Power
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Power
+
+          - type: history-graph
+            title: Unified PI - Error / P / I / Sum
+            hours_to_show: 2
+            refresh_interval: 5
+            entities:
+              - entity: sensor.ecoflow_unified_error
+                name: Error
+              - entity: sensor.ecoflow_unified_p_term
+                name: P Term
+              - entity: sensor.ecoflow_unified_i_term
+                name: I Term
+              - entity: sensor.ecoflow_unified_pi_sum
+                name: PI Sum
+              - entity: sensor.ecoflow_unified_pi_sum_stable
+                name: PI Stable
+
+          - type: history-graph
+            title: EcoFlow Output - Charge / Discharge
+            hours_to_show: 2
+            refresh_interval: 5
+            entities:
+              - entity: sensor.efctrl_current_charge_limit
+                name: Charge Limit
+              - entity: sensor.efctrl_current_discharge_limit
+                name: Discharge Limit
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Unified Power
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Unified Power
+
+          - type: history-graph
+            title: Charge Gate - PV / Grid
+            hours_to_show: 6
+            refresh_interval: 10
+            entities:
+              - entity: sensor.ecoflow_unified_pv_power
+                name: PV Power
+              - entity: sensor.ecoflow_unified_grid_smoothed_value
+                name: Grid Smoothed
+              - entity: input_number.ecoflow_unified_charge_enable_pv_w
+                name: Enable PV
+              - entity: input_number.ecoflow_unified_charge_disable_pv_w
+                name: Disable PV
+              - entity: input_number.ecoflow_unified_charge_enable_export_w
+                name: Enable Export
+
+          - type: history-graph
+            title: EV Logic - Power
+            hours_to_show: 4
+            refresh_interval: 5
+            entities:
+              - entity: sensor.ecoflow_unified_ev_power
+                name: EV Power
+              - entity: sensor.ecoflow_unified_current_power
+                name: EcoFlow Current Power
+              - entity: sensor.ecoflow_unified_target_power
+                name: EcoFlow Target Power
+              - entity: sensor.ecoflow_unified_current_discharge
+                name: Current Discharge
+              - entity: sensor.ecoflow_unified_current_charge
+                name: Current Charge
+
+          - type: history-graph
+            title: Battery Charging - PV / Grid Power
+            hours_to_show: 6
+            refresh_interval: 10
+            entities:
+              - entity: sensor.ecoflow_battery_charge_power_actual
+                name: Battery Charge Power
+              - entity: sensor.ecoflow_battery_charge_from_pv_power
+                name: From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_power
+                name: From Grid
+
+          - type: history-graph
+            title: Battery Charging - Daily kWh PV / Grid
+            hours_to_show: 24
+            refresh_interval: 60
+            entities:
+              - entity: sensor.ecoflow_battery_charge_from_pv_daily
+                name: Today From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_daily
+                name: Today From Grid
+
+          - type: history-graph
+            title: Battery Charging - Monthly kWh PV / Grid
+            hours_to_show: 168
+            refresh_interval: 300
+            entities:
+              - entity: sensor.ecoflow_battery_charge_from_pv_monthly
+                name: Month From PV
+              - entity: sensor.ecoflow_battery_charge_from_grid_monthly
+                name: Month From Grid
+
+          - type: history-graph
+            title: EcoFlow SOC / Protection
+            hours_to_show: 12
+            refresh_interval: 30
+            entities:
+              - entity: sensor.ecoflow_unified_soc
+                name: SOC
+              - entity: input_number.ecoflow_unified_min_discharge_soc
+                name: Min Discharge SOC
+              - entity: sensor.efctrl_backup_reserve
+                name: Backup Reserve
+
+  - title: Log
+    path: ecoflow-log
+    icon: mdi:text-box-search
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: entities
+            title: EcoFlow Safety - Automations
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: automation.ecoflow_stream_controller_off_safety
+                name: Controller OFF Safety
+              - entity: automation.ecoflow_stream_charge_gate_enable
+                name: Charge Gate Enable
+              - entity: automation.ecoflow_stream_charge_gate_disable
+                name: Charge Gate Disable
+              - entity: automation.ecoflow_stream_unified_integral_reset
+                name: Integral Reset Automation
+              - entity: automation.ecoflow_stream_unified_zero_grid_pi_controller_beta
+                name: Unified PI Controller
+
+          - type: entities
+            title: EcoFlow Log - Live Status
+            show_header_toggle: false
+            state_color: true
+            entities:
+              - entity: sensor.ecoflow_unified_target_mode
+                name: Current Mode
+              - entity: sensor.ecoflow_unified_charge_gate
+                name: Charge Gate
+              - entity: input_boolean.ecoflow_unified_controller_enabled
+                name: Controller Enabled
+              - entity: input_boolean.ecoflow_unified_charge_allowed
+                name: Charge Allowed
+              - entity: input_boolean.ecoflow_ev_discharge_800w
+                name: EV Support Enabled
+              - type: divider
+              - entity: sensor.ecoflow_unified_error
+                name: Error
+              - entity: sensor.ecoflow_unified_target_power
+                name: Target Power
+              - entity: sensor.ecoflow_unified_current_power
+                name: Current Power
+              - type: divider
+              - entity: sensor.efctrl_current_charge_limit
+                name: Charge Limit
+              - entity: sensor.efctrl_current_discharge_limit
+                name: Discharge Limit
+              - entity: sensor.efctrl_backup_reserve
+                name: Backup Reserve
+              - entity: sensor.efctrl_energy_strategy
+                name: Energy Strategy
+
+          - type: logbook
+            title: EcoFlow Live Log - Last 2 Hours
+            hours_to_show: 2
+            entities:
+              - automation.ecoflow_stream_unified_zero_grid_pi_controller_beta
+              - automation.ecoflow_stream_charge_gate_enable
+              - automation.ecoflow_stream_charge_gate_disable
+              - automation.ecoflow_stream_controller_off_safety
+              - automation.ecoflow_stream_unified_integral_reset
+              - input_boolean.ecoflow_unified_controller_enabled
+              - input_boolean.ecoflow_unified_charge_allowed
+              - input_boolean.ecoflow_ev_discharge_800w
+              - sensor.ecoflow_unified_target_mode
+              - sensor.ecoflow_unified_charge_gate
+              - sensor.ecoflow_unified_ev_charging
+              - sensor.ecoflow_unified_ev_support
+              - sensor.ecoflow_unified_error
+              - sensor.ecoflow_unified_target_power
+              - sensor.ecoflow_unified_current_power
+              - sensor.efctrl_current_charge_limit
+              - sensor.efctrl_current_discharge_limit
+              - sensor.efctrl_backup_reserve
+              - sensor.efctrl_energy_strategy
+
+          - type: logbook
+            title: EcoFlow Live Log - Last 12 Hours
+            hours_to_show: 12
+            entities:
+              - input_boolean.ecoflow_unified_controller_enabled
+              - input_boolean.ecoflow_unified_charge_allowed
+              - input_boolean.ecoflow_ev_discharge_800w
+              - sensor.ecoflow_unified_target_mode
+              - sensor.ecoflow_unified_charge_gate
+              - sensor.ecoflow_unified_error
+              - sensor.ecoflow_unified_target_power
+              - sensor.ecoflow_unified_current_power
+              - sensor.efctrl_current_charge_limit
+              - sensor.efctrl_current_discharge_limit
+              - sensor.efctrl_energy_strategy

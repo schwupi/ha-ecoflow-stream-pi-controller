@@ -1,0 +1,1270 @@
+###############################################################################
+# EcoFlow STREAM Unified Zero Grid PI Controller for Home Assistant
+# File: /config/packages/ecoflow_stream_pi_controller.yaml
+#
+# BETA / experimental.
+#
+# Concept:
+#   unified_power > 0  => discharge battery
+#   unified_power < 0  => charge battery
+#   unified_power = 0  => idle / deadband
+#
+# Grid sensor convention:
+#   positive = grid import
+#   negative = grid export / feed-in
+#
+# Control approach:
+#   Incremental PI controller
+#
+#   error = grid_power - target_grid
+#   p_term = kp * error
+#   i_term = accumulated and limited error correction
+#
+#   target_power = current_unified_power + p_term + i_term
+#
+# Required / key enabling integration:
+#   - EcoFlow BLE integration for Home Assistant
+#     rabits / ha-ef-ble
+#     https://github.com/rabits/ha-ef-ble
+#
+#   Without ha-ef-ble and the work behind it, this controller would not be
+#   possible in this form.
+#
+# Tested reference setup:
+#   - EcoFlow STREAM Ultra X / STREAM Ultra class device
+#   - EcoFlow firmware v1.0.2.1
+#   - Home Assistant 2026.4.x
+#   - ha-ef-ble v0.8.5 during development
+#
+# Inspiration / conceptual references:
+#   - Proportional-integral-derivative controller
+#     https://en.wikipedia.org/wiki/Proportional%E2%80%93integral%E2%80%93derivative_controller
+#
+#   - SunEnergyXT / Zero-Feed-in-Controller.yaml
+#     https://gist.github.com/SunEnergyXT/e5487ff1669ed17c7a14e00ca2390f75
+#
+# Notes:
+#   This package is not a copy of the SunEnergyXT controller.
+#   It uses the same general control idea of an incremental PI loop,
+#   but is adapted for EcoFlow STREAM devices in Home Assistant.
+#
+# Main differences:
+#   - unified charge/discharge target power
+#   - EcoFlow STREAM charge and base-load actuators
+#   - deterministic charge/discharge switching
+#   - charge gate based on PV surplus and stable export
+#   - SOC protection
+#   - optional EV support mode
+#   - anti-windup handling for actuator limits
+#   - Home Assistant package style with adapter entities
+#
+# Recommended conservative beta start values:
+#   Kp               = 0.20
+#   Ki               = 0.002
+#   Target Grid      = -20 W
+#   Deadband         = 50 W
+#   Integral Limit   = 120 W
+#   Control interval = 5 s
+#
+# IMPORTANT:
+#   1. Adapt only the USER CONFIG / ADAPTER LAYER first.
+#   2. Test with the controller disabled.
+#   3. Enable only after all alias sensors and scripts work.
+###############################################################################
+
+###############################################################################
+# USER CONFIG / ADAPTER LAYER
+#
+# Replace the entity IDs below with your own Home Assistant entities.
+# The rest of the controller uses only the internal EFCTRL aliases.
+###############################################################################
+
+template:
+  - sensor:
+      #########################################################################
+      # Required input aliases
+      #########################################################################
+
+      - name: "EFCTRL Grid Power"
+        unique_id: efctrl_grid_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower
+        # Replace this with your grid power sensor.
+        # Sign convention required by this controller:
+        # positive = grid import, negative = grid export / feed-in.
+        state: >
+          {{ states('sensor.your_grid_power_sensor') | float(0) }}
+
+      - name: "EFCTRL PV Power"
+        unique_id: efctrl_pv_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:solar-power
+        # Replace this with your PV production power sensor.
+        state: >
+          {{ states('sensor.your_pv_power_sensor') | float(0) }}
+
+      - name: "EFCTRL Battery SOC"
+        unique_id: efctrl_battery_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        icon: mdi:battery
+        # Replace this with your EcoFlow battery SOC sensor.
+        state: >
+          {{ states('sensor.your_battery_soc_sensor') | float(0) }}
+
+      - name: "EFCTRL EV Power"
+        unique_id: efctrl_ev_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:car-electric
+        # Optional: replace this with your EV charger power sensor.
+        # If unavailable, leave the placeholder. It will evaluate to 0 W.
+        state: >
+          {{ states('sensor.your_ev_charger_power_sensor') | float(0) }}
+
+      #########################################################################
+      # Required EcoFlow actuator-state aliases
+      #########################################################################
+
+      - name: "EFCTRL Current Charge Limit"
+        unique_id: efctrl_current_charge_limit
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-down
+        # Replace this with your EcoFlow charging power limit number entity.
+        state: >
+          {{ states('number.your_ecoflow_charging_power_limit') | float(0) }}
+
+      - name: "EFCTRL Current Discharge Limit"
+        unique_id: efctrl_current_discharge_limit
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-up
+        # Replace this with your EcoFlow base-load / discharge number entity.
+        state: >
+          {{ states('number.your_ecoflow_base_load_power') | float(0) }}
+
+      - name: "EFCTRL Backup Reserve"
+        unique_id: efctrl_backup_reserve
+        unit_of_measurement: "%"
+        icon: mdi:battery-lock
+        # Replace this with your EcoFlow backup reserve number entity.
+        state: >
+          {{ states('number.your_ecoflow_backup_reserve') | float(0) }}
+
+      - name: "EFCTRL Energy Strategy"
+        unique_id: efctrl_energy_strategy
+        icon: mdi:state-machine
+        # Replace this with your EcoFlow energy strategy select entity.
+        state: >
+          {{ states('select.your_ecoflow_energy_strategy') }}
+
+      - name: "EFCTRL Battery Charge Power Actual"
+        unique_id: efctrl_battery_charge_power_actual
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-up
+        # Optional: replace this with a real measured battery charging power sensor.
+        # If unavailable, leave the placeholder. It will fall back to the configured
+        # EcoFlow charge limit.
+        state: >
+          {{ states('sensor.your_battery_charge_power_sensor')
+             | float(states('sensor.efctrl_current_charge_limit') | float(0)) }}
+
+      #########################################################################
+      # Controller sensors
+      #########################################################################
+
+      - name: "EcoFlow Unified Grid Raw"
+        unique_id: ecoflow_unified_grid_raw
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.efctrl_grid_power') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified Grid Smoothed Value"
+        unique_id: ecoflow_unified_grid_smoothed_value
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.ecoflow_unified_grid_smoothed') %}
+          {{ s | float(states('sensor.efctrl_grid_power') | float(0)) | round(0) }}
+
+      - name: "EcoFlow Unified PV Power"
+        unique_id: ecoflow_unified_pv_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:solar-power
+        state: >
+          {{ states('sensor.efctrl_pv_power') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified Charge Gate"
+        unique_id: ecoflow_unified_charge_gate
+        icon: mdi:solar-power
+        state: >
+          {% if is_state('input_boolean.ecoflow_unified_charge_allowed', 'on') %}
+            allowed
+          {% else %}
+            blocked
+          {% endif %}
+
+      - name: "EcoFlow Unified EV Power"
+        unique_id: ecoflow_unified_ev_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:car-electric
+        state: >
+          {{ states('sensor.efctrl_ev_power') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified EV Charging"
+        unique_id: ecoflow_unified_ev_charging
+        icon: mdi:car-electric
+        state: >
+          {% set ev_power = states('sensor.efctrl_ev_power') | float(0) %}
+          {% set threshold = states('input_number.ecoflow_unified_ev_threshold_w') | float(1000) %}
+          {% if ev_power > threshold %}
+            on
+          {% else %}
+            off
+          {% endif %}
+
+      - name: "EcoFlow Unified EV Support"
+        unique_id: ecoflow_unified_ev_support
+        icon: mdi:car-electric
+        state: >
+          {% if is_state('input_boolean.ecoflow_ev_discharge_800w', 'on') %}
+            on
+          {% else %}
+            off
+          {% endif %}
+
+      - name: "EcoFlow Unified Current Charge"
+        unique_id: ecoflow_unified_current_charge
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.efctrl_current_charge_limit') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified Current Discharge"
+        unique_id: ecoflow_unified_current_discharge
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.efctrl_current_discharge_limit') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified Current Power"
+        unique_id: ecoflow_unified_current_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set discharge = states('sensor.efctrl_current_discharge_limit') | float(0) %}
+          {% set charge = states('sensor.efctrl_current_charge_limit') | float(0) %}
+          {{ (discharge - charge) | round(0) }}
+
+      - name: "EcoFlow Unified SOC"
+        unique_id: ecoflow_unified_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        state: >
+          {{ states('sensor.efctrl_battery_soc') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified Error"
+        unique_id: ecoflow_unified_error
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set s = states('sensor.ecoflow_unified_grid_smoothed') %}
+          {% set grid = s | float(states('sensor.efctrl_grid_power') | float(0)) %}
+          {% set target = states('input_number.ecoflow_unified_target_grid') | float(-20) %}
+          {{ (grid - target) | round(0) }}
+
+      - name: "EcoFlow Unified P Term"
+        unique_id: ecoflow_unified_p_term
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set error = states('sensor.ecoflow_unified_error') | float(0) %}
+          {% set kp = states('input_number.ecoflow_unified_kp') | float(0.20) %}
+          {{ (kp * error) | round(0) }}
+
+      - name: "EcoFlow Unified I Term"
+        unique_id: ecoflow_unified_i_term
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('input_number.ecoflow_unified_integral') | float(0) | round(0) }}
+
+      - name: "EcoFlow Unified PI Sum"
+        unique_id: ecoflow_unified_pi_sum
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:brain
+        state: >
+          {% set p = states('sensor.ecoflow_unified_p_term') | float(0) %}
+          {% set i = states('sensor.ecoflow_unified_i_term') | float(0) %}
+          {{ (p + i) | round(0) }}
+
+      - name: "EcoFlow Unified PI Sum Stable"
+        unique_id: ecoflow_unified_pi_sum_stable
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:brain
+        state: >
+          {% set p = states('sensor.ecoflow_unified_p_term') | float(0) %}
+          {% set i = states('sensor.ecoflow_unified_i_term') | float(0) %}
+          {% set dead = states('input_number.ecoflow_unified_deadband') | float(50) %}
+          {% set val = p + i %}
+          {% if val | abs < dead %}
+            0
+          {% else %}
+            {{ val | round(0) }}
+          {% endif %}
+
+      - name: "EcoFlow Unified Target Power"
+        unique_id: ecoflow_unified_target_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set enabled = is_state('input_boolean.ecoflow_unified_controller_enabled', 'on') %}
+          {% set charge_allowed = is_state('input_boolean.ecoflow_unified_charge_allowed', 'on') %}
+
+          {% set ev_power = states('sensor.efctrl_ev_power') | float(0) %}
+          {% set ev_threshold = states('input_number.ecoflow_unified_ev_threshold_w') | float(1000) %}
+          {% set ev_charging = ev_power > ev_threshold %}
+          {% set ev_support = is_state('input_boolean.ecoflow_ev_discharge_800w', 'on') %}
+          {% set ev_discharge_power = states('input_number.ecoflow_unified_ev_discharge_power') | float(800) %}
+
+          {% set soc = states('sensor.efctrl_battery_soc') | float(0) %}
+          {% set min_soc = states('input_number.ecoflow_unified_min_discharge_soc') | float(21) %}
+
+          {% set s = states('sensor.ecoflow_unified_grid_smoothed') %}
+          {% set grid = s | float(states('sensor.efctrl_grid_power') | float(0)) %}
+
+          {% set target_grid = states('input_number.ecoflow_unified_target_grid') | float(-20) %}
+          {% set deadband = states('input_number.ecoflow_unified_deadband') | float(50) %}
+          {% set kp = states('input_number.ecoflow_unified_kp') | float(0.20) %}
+          {% set integral = states('input_number.ecoflow_unified_integral') | float(0) %}
+          {% set max_discharge = states('input_number.ecoflow_unified_max_discharge') | float(800) %}
+          {% set max_charge = states('input_number.ecoflow_unified_max_charge') | float(1200) %}
+          {% set discharge_step = states('input_number.ecoflow_unified_discharge_step_w') | float(10) %}
+          {% set charge_step = states('input_number.ecoflow_unified_charge_step_w') | float(1) %}
+
+          {% set current_discharge = states('sensor.efctrl_current_discharge_limit') | float(0) %}
+          {% set current_charge = states('sensor.efctrl_current_charge_limit') | float(0) %}
+          {% set current_unified = current_discharge - current_charge %}
+          {% set error = grid - target_grid %}
+
+          {% if not enabled %}
+            0
+
+          {% elif ev_charging and ev_support and soc > min_soc %}
+            {{ [ev_discharge_power, max_discharge] | min | round(0) }}
+
+          {% elif ev_charging and ev_support and soc <= min_soc %}
+            0
+
+          {% elif ev_charging and not ev_support %}
+            0
+
+          {% elif not charge_allowed and current_unified < 0 %}
+            0
+
+          {% elif error | abs <= deadband %}
+            {{ current_unified | round(0) }}
+
+          {% else %}
+            {% set raw = current_unified + (kp * error) + integral %}
+            {% set raw = [raw, max_discharge] | min %}
+            {% set raw = [raw, -max_charge] | max %}
+
+            {% if raw < -deadband and not charge_allowed %}
+              0
+            {% elif raw > -deadband and raw < deadband %}
+              0
+            {% elif raw > 0 %}
+              {{ (((raw / discharge_step) | round(0, 'floor')) * discharge_step) | round(0) }}
+            {% else %}
+              {{ (((raw / charge_step) | round(0, 'ceil')) * charge_step) | round(0) }}
+            {% endif %}
+          {% endif %}
+
+      - name: "EcoFlow Unified Target Mode"
+        unique_id: ecoflow_unified_target_mode
+        icon: mdi:state-machine
+        state: >
+          {% set enabled = is_state('input_boolean.ecoflow_unified_controller_enabled', 'on') %}
+          {% set charge_allowed = is_state('input_boolean.ecoflow_unified_charge_allowed', 'on') %}
+
+          {% set ev_power = states('sensor.efctrl_ev_power') | float(0) %}
+          {% set ev_threshold = states('input_number.ecoflow_unified_ev_threshold_w') | float(1000) %}
+          {% set ev_charging = ev_power > ev_threshold %}
+          {% set ev_support = is_state('input_boolean.ecoflow_ev_discharge_800w', 'on') %}
+
+          {% set soc = states('sensor.efctrl_battery_soc') | float(0) %}
+          {% set min_soc = states('input_number.ecoflow_unified_min_discharge_soc') | float(21) %}
+
+          {% set p = states('sensor.ecoflow_unified_target_power') | float(0) %}
+          {% set current_power = states('sensor.ecoflow_unified_current_power') | float(0) %}
+          {% set deadband = states('input_number.ecoflow_unified_deadband') | float(50) %}
+
+          {% if not enabled %}
+            disabled
+          {% elif ev_charging and ev_support and soc <= min_soc %}
+            soc_blocked
+          {% elif ev_charging and ev_support and soc > min_soc %}
+            ev_discharge
+          {% elif ev_charging and not ev_support %}
+            ev_idle
+          {% elif soc <= min_soc and (p > deadband or current_power > deadband) %}
+            soc_blocked
+          {% elif not charge_allowed and current_power < -deadband %}
+            charge_blocked
+          {% elif p > deadband %}
+            discharge
+          {% elif p < -deadband %}
+            charge
+          {% else %}
+            idle
+          {% endif %}
+
+      #########################################################################
+      # Optional accounting sensors: estimated battery charge source
+      #########################################################################
+
+      - name: "EcoFlow Battery Charge Power Actual"
+        unique_id: ecoflow_battery_charge_power_actual
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-up
+        state: >
+          {{ states('sensor.efctrl_battery_charge_power_actual') | float(0) | round(0) }}
+
+      - name: "EcoFlow Battery Charge From Grid Power"
+        unique_id: ecoflow_battery_charge_from_grid_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower-import
+        state: >
+          {% set charge = states('sensor.ecoflow_battery_charge_power_actual') | float(0) %}
+          {% set grid = states('sensor.efctrl_grid_power') | float(0) %}
+          {% set grid_import = [grid, 0] | max %}
+          {{ [charge, grid_import] | min | round(0) }}
+
+      - name: "EcoFlow Battery Charge From PV Power"
+        unique_id: ecoflow_battery_charge_from_pv_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:solar-power
+        state: >
+          {% set charge = states('sensor.ecoflow_battery_charge_power_actual') | float(0) %}
+          {% set grid_part = states('sensor.ecoflow_battery_charge_from_grid_power') | float(0) %}
+          {{ [charge - grid_part, 0] | max | round(0) }}
+
+      - name: "EcoFlow Battery Charge PV Share Daily"
+        unique_id: ecoflow_battery_charge_pv_share_daily
+        unit_of_measurement: "%"
+        icon: mdi:solar-power
+        state: >
+          {% set pv = states('sensor.ecoflow_battery_charge_from_pv_daily') | float(0) %}
+          {% set grid = states('sensor.ecoflow_battery_charge_from_grid_daily') | float(0) %}
+          {% set total = pv + grid %}
+          {% if total > 0 %}
+            {{ ((pv / total) * 100) | round(1) }}
+          {% else %}
+            0
+          {% endif %}
+
+      - name: "EcoFlow Battery Charge PV Share Monthly"
+        unique_id: ecoflow_battery_charge_pv_share_monthly
+        unit_of_measurement: "%"
+        icon: mdi:solar-power
+        state: >
+          {% set pv = states('sensor.ecoflow_battery_charge_from_pv_monthly') | float(0) %}
+          {% set grid = states('sensor.ecoflow_battery_charge_from_grid_monthly') | float(0) %}
+          {% set total = pv + grid %}
+          {% if total > 0 %}
+            {{ ((pv / total) * 100) | round(1) }}
+          {% else %}
+            0
+          {% endif %}
+
+###############################################################################
+# SCRIPTS / ACTUATOR ADAPTERS
+#
+# Replace the target entity IDs below with your own EcoFlow entities.
+###############################################################################
+
+script:
+  efctrl_set_charge_power:
+    alias: EFCTRL Set Charge Power
+    mode: queued
+    fields:
+      value:
+        description: Charge power in W
+        example: 500
+    sequence:
+      - service: number.set_value
+        target:
+          entity_id: number.your_ecoflow_charging_power_limit
+        data:
+          value: "{{ value | int(0) }}"
+
+  efctrl_set_discharge_power:
+    alias: EFCTRL Set Discharge Power
+    mode: queued
+    fields:
+      value:
+        description: Discharge / base-load power in W
+        example: 300
+    sequence:
+      - service: number.set_value
+        target:
+          entity_id: number.your_ecoflow_base_load_power
+        data:
+          value: "{{ value | int(0) }}"
+
+  efctrl_set_backup_reserve:
+    alias: EFCTRL Set Backup Reserve
+    mode: queued
+    fields:
+      value:
+        description: Backup reserve in percent
+        example: 20
+    sequence:
+      - service: number.set_value
+        target:
+          entity_id: number.your_ecoflow_backup_reserve
+        data:
+          value: "{{ value | int(0) }}"
+
+  efctrl_set_energy_strategy:
+    alias: EFCTRL Set Energy Strategy
+    mode: queued
+    fields:
+      option:
+        description: EcoFlow energy strategy option
+        example: self_powered
+    sequence:
+      - service: select.select_option
+        target:
+          entity_id: select.your_ecoflow_energy_strategy
+        data:
+          option: "{{ option }}"
+
+###############################################################################
+# HELPERS
+###############################################################################
+
+input_boolean:
+  ecoflow_unified_controller_enabled:
+    name: EcoFlow Unified Controller Enabled
+    icon: mdi:battery-sync
+    initial: false
+
+  ecoflow_ev_discharge_800w:
+    name: EcoFlow EV Discharge Support
+    icon: mdi:car-electric
+    initial: false
+
+  ecoflow_unified_charge_allowed:
+    name: EcoFlow Unified Charge Allowed
+    icon: mdi:solar-power
+    initial: false
+
+input_button:
+  ecoflow_unified_integral_reset:
+    name: EcoFlow Unified Integral Reset
+    icon: mdi:restore
+
+input_number:
+  ecoflow_unified_kp:
+    name: EcoFlow Unified Kp
+    min: 0
+    max: 2
+    step: 0.05
+    mode: box
+    initial: 0.20
+
+  ecoflow_unified_ki:
+    name: EcoFlow Unified Ki
+    min: 0
+    max: 0.2
+    step: 0.001
+    mode: box
+    initial: 0.002
+
+  ecoflow_unified_integral:
+    name: EcoFlow Unified Integral
+    min: -500
+    max: 500
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: 0
+
+  ecoflow_unified_integral_limit:
+    name: EcoFlow Unified Integral Limit
+    min: 0
+    max: 500
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 120
+
+  ecoflow_unified_target_grid:
+    name: EcoFlow Unified Target Grid
+    min: -100
+    max: 100
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: -20
+
+  ecoflow_unified_deadband:
+    name: EcoFlow Unified Deadband
+    min: 0
+    max: 200
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: 50
+
+  ecoflow_unified_max_discharge:
+    name: EcoFlow Unified Max Discharge
+    min: 0
+    max: 800
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 800
+
+  ecoflow_unified_max_charge:
+    name: EcoFlow Unified Max Charge
+    min: 0
+    max: 1200
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: 1200
+
+  ecoflow_unified_discharge_step_w:
+    name: EcoFlow Unified Discharge Step
+    min: 1
+    max: 100
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: 10
+
+  ecoflow_unified_charge_step_w:
+    name: EcoFlow Unified Charge Step
+    min: 1
+    max: 100
+    step: 1
+    unit_of_measurement: "W"
+    mode: box
+    initial: 1
+
+  ecoflow_unified_min_discharge_soc:
+    name: EcoFlow Unified Min Discharge SOC
+    min: 5
+    max: 90
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 21
+
+  ecoflow_unified_ev_threshold_w:
+    name: EcoFlow Unified EV Threshold
+    min: 0
+    max: 11000
+    step: 50
+    unit_of_measurement: "W"
+    mode: box
+    initial: 1000
+
+  ecoflow_unified_ev_discharge_power:
+    name: EcoFlow Unified EV Discharge Power
+    min: 0
+    max: 800
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 800
+
+  ecoflow_unified_charge_enable_pv_w:
+    name: EcoFlow Charge Enable PV
+    min: 0
+    max: 3000
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 250
+
+  ecoflow_unified_charge_disable_pv_w:
+    name: EcoFlow Charge Disable PV
+    min: 0
+    max: 3000
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 150
+
+  ecoflow_unified_charge_enable_export_w:
+    name: EcoFlow Charge Enable Export
+    min: 0
+    max: 1000
+    step: 10
+    unit_of_measurement: "W"
+    mode: box
+    initial: 80
+
+###############################################################################
+# FILTER / ENERGY SENSORS
+###############################################################################
+
+sensor:
+  - platform: filter
+    name: "EcoFlow Unified Grid Smoothed"
+    entity_id: sensor.efctrl_grid_power
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:00:10"
+
+  - platform: integration
+    source: sensor.ecoflow_battery_charge_from_pv_power
+    name: "EcoFlow Battery Charge From PV Energy"
+    unique_id: ecoflow_battery_charge_from_pv_energy
+    unit_prefix: k
+    unit_time: h
+    round: 2
+    method: left
+
+  - platform: integration
+    source: sensor.ecoflow_battery_charge_from_grid_power
+    name: "EcoFlow Battery Charge From Grid Energy"
+    unique_id: ecoflow_battery_charge_from_grid_energy
+    unit_prefix: k
+    unit_time: h
+    round: 2
+    method: left
+
+###############################################################################
+# AUTOMATIONS
+###############################################################################
+
+automation:
+  - alias: "EcoFlow STREAM - Controller Off Safety"
+    id: ecoflow_stream_controller_off_safety
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.ecoflow_unified_controller_enabled
+        to: "off"
+    action:
+      - service: script.efctrl_set_charge_power
+        data:
+          value: 0
+
+      - service: script.efctrl_set_discharge_power
+        data:
+          value: 0
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ecoflow_unified_integral
+        data:
+          value: 0
+
+  - alias: "EcoFlow STREAM - Unified Integral Reset"
+    id: ecoflow_stream_unified_integral_reset
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_button.ecoflow_unified_integral_reset
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ecoflow_unified_integral
+        data:
+          value: 0
+
+  - alias: "EcoFlow STREAM - Charge Gate Enable"
+    id: ecoflow_stream_charge_gate_enable
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >
+          {% set pv = states('sensor.efctrl_pv_power') | float(0) %}
+          {% set grid = states('sensor.ecoflow_unified_grid_smoothed_value') | float(0) %}
+          {% set pv_enable = states('input_number.ecoflow_unified_charge_enable_pv_w') | float(250) %}
+          {% set export_enable = states('input_number.ecoflow_unified_charge_enable_export_w') | float(80) %}
+          {{
+            pv > pv_enable
+            and grid < (export_enable * -1)
+          }}
+        for: "00:01:00"
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ecoflow_unified_charge_allowed
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ecoflow_unified_integral
+        data:
+          value: 0
+
+  - alias: "EcoFlow STREAM - Charge Gate Disable"
+    id: ecoflow_stream_charge_gate_disable
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >
+          {% set pv = states('sensor.efctrl_pv_power') | float(0) %}
+          {% set pv_disable = states('input_number.ecoflow_unified_charge_disable_pv_w') | float(150) %}
+          {{ pv < pv_disable }}
+        for: "00:01:00"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ecoflow_unified_charge_allowed
+
+      - service: script.efctrl_set_charge_power
+        data:
+          value: 0
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ecoflow_unified_integral
+        data:
+          value: 0
+
+  - alias: "EcoFlow STREAM - Unified Zero Grid PI Controller BETA"
+    id: ecoflow_stream_unified_zero_grid_pi_controller_beta
+    mode: single
+    max_exceeded: silent
+
+    trigger:
+      - platform: time_pattern
+        seconds: "/5"
+
+      - platform: state
+        entity_id:
+          - input_boolean.ecoflow_unified_controller_enabled
+          - input_boolean.ecoflow_ev_discharge_800w
+          - input_boolean.ecoflow_unified_charge_allowed
+
+    variables:
+      enabled: "{{ is_state('input_boolean.ecoflow_unified_controller_enabled', 'on') }}"
+      charge_allowed: "{{ is_state('input_boolean.ecoflow_unified_charge_allowed', 'on') }}"
+
+      ev_power: "{{ states('sensor.efctrl_ev_power') | float(0) }}"
+      ev_threshold: "{{ states('input_number.ecoflow_unified_ev_threshold_w') | float(1000) }}"
+      ev_charging: "{{ states('sensor.efctrl_ev_power') | float(0) > states('input_number.ecoflow_unified_ev_threshold_w') | float(1000) }}"
+      ev_support_enabled: "{{ is_state('input_boolean.ecoflow_ev_discharge_800w', 'on') }}"
+      ev_discharge_power: "{{ states('input_number.ecoflow_unified_ev_discharge_power') | float(800) }}"
+
+      grid: >
+        {% set s = states('sensor.ecoflow_unified_grid_smoothed') %}
+        {{ s | float(states('sensor.efctrl_grid_power') | float(0)) }}
+
+      target_grid: "{{ states('input_number.ecoflow_unified_target_grid') | float(-20) }}"
+      error: "{{ grid | float(0) - target_grid | float(-20) }}"
+      deadband: "{{ states('input_number.ecoflow_unified_deadband') | float(50) }}"
+
+      current_charge: "{{ states('sensor.efctrl_current_charge_limit') | float(0) }}"
+      current_discharge: "{{ states('sensor.efctrl_current_discharge_limit') | float(0) }}"
+      max_charge: "{{ states('input_number.ecoflow_unified_max_charge') | float(1200) }}"
+      max_discharge: "{{ states('input_number.ecoflow_unified_max_discharge') | float(800) }}"
+      charge_step: "{{ states('input_number.ecoflow_unified_charge_step_w') | float(1) }}"
+      discharge_step: "{{ states('input_number.ecoflow_unified_discharge_step_w') | float(10) }}"
+
+      ki: "{{ states('input_number.ecoflow_unified_ki') | float(0.002) }}"
+      integral_old: "{{ states('input_number.ecoflow_unified_integral') | float(0) }}"
+      dt: 5
+      integral_limit: "{{ states('input_number.ecoflow_unified_integral_limit') | float(120) }}"
+
+      integral_new: >
+        {% set e = error | float(0) %}
+        {% set dead = deadband | float(50) %}
+        {% set old = integral_old | float(0) %}
+        {% set ki_f = ki | float(0.002) %}
+        {% set dt_f = dt | float(5) %}
+        {% set lim = integral_limit | float(120) %}
+        {% set ev_load = ev_charging | bool(false) %}
+        {% set charge_ok = charge_allowed | bool(false) %}
+
+        {% set c_dis = current_discharge | float(0) %}
+        {% set c_chg = current_charge | float(0) %}
+        {% set max_dis = max_discharge | float(800) %}
+        {% set max_chg = max_charge | float(1200) %}
+
+        {% set at_max_discharge = c_dis >= (max_dis - 10) %}
+        {% set at_max_charge = c_chg >= (max_chg - 10) %}
+
+        {% if ev_load %}
+          0
+
+        {% elif not charge_ok and e < -dead %}
+          {{ old * 0.90 }}
+
+        {% elif at_max_discharge and e > 0 %}
+          {{ old }}
+
+        {% elif at_max_charge and e < 0 %}
+          {{ old }}
+
+        {% elif (e > dead and old < 0) or (e < -dead and old > 0) %}
+          {{ old * 0.5 }}
+
+        {% elif e | abs <= dead %}
+          {{ old * 0.90 }}
+
+        {% else %}
+          {% set v = old + (ki_f * e * dt_f) %}
+          {% if v > lim %}
+            {{ lim }}
+          {% elif v < -lim %}
+            {{ -lim }}
+          {% else %}
+            {{ v }}
+          {% endif %}
+        {% endif %}
+
+      target_power: "{{ states('sensor.ecoflow_unified_target_power') | float(0) }}"
+      target_mode: "{{ states('sensor.ecoflow_unified_target_mode') }}"
+
+      strategy: "{{ states('sensor.efctrl_energy_strategy') }}"
+      backup_reserve: "{{ states('sensor.efctrl_backup_reserve') | float(0) }}"
+
+      soc: "{{ states('sensor.efctrl_battery_soc') | float(0) }}"
+      min_discharge_soc: "{{ states('input_number.ecoflow_unified_min_discharge_soc') | float(21) }}"
+
+      target_charge: >
+        {% if target_power | float(0) < 0 %}
+          {{ (target_power | float(0) * -1) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+      target_discharge: >
+        {% if target_power | float(0) > 0 %}
+          {{ target_power | float(0) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+    condition:
+      - condition: template
+        value_template: "{{ enabled }}"
+
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ecoflow_unified_integral
+        data:
+          value: "{{ integral_new | round(0) }}"
+
+      - choose:
+          #####################################################################
+          # SOC protection
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{
+                    (
+                      target_mode == 'discharge'
+                      or target_mode == 'ev_discharge'
+                      or target_mode == 'soc_blocked'
+                      or (
+                        ev_charging | bool(false)
+                        and ev_support_enabled | bool(false)
+                      )
+                    )
+                    and soc | float(0) <= min_discharge_soc | float(21)
+                  }}
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_charge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: 0
+
+              - if:
+                  - condition: template
+                    value_template: "{{ current_discharge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_discharge_power
+                    data:
+                      value: 0
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.ecoflow_unified_integral
+                data:
+                  value: 0
+
+              - stop: "SOC protection active: discharge blocked and integral reset."
+
+          #####################################################################
+          # EV charging, support disabled
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{
+                    ev_charging | bool(false)
+                    and not (ev_support_enabled | bool(false))
+                  }}
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_charge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: 0
+
+              - if:
+                  - condition: template
+                    value_template: "{{ current_discharge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_discharge_power
+                    data:
+                      value: 0
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.ecoflow_unified_integral
+                data:
+                  value: 0
+
+              - stop: "EV charging active and support disabled: EcoFlow forced to 0 W."
+
+          #####################################################################
+          # EV charging, support enabled
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{
+                    ev_charging | bool(false)
+                    and ev_support_enabled | bool(false)
+                    and soc | float(0) > min_discharge_soc | float(21)
+                  }}
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_charge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: 0
+                  - stop: "EV support active: charging set to 0 first."
+
+              - if:
+                  - condition: template
+                    value_template: "{{ strategy != 'self_powered' }}"
+                then:
+                  - service: script.efctrl_set_energy_strategy
+                    data:
+                      option: "self_powered"
+                  - stop: "EV support active: energy strategy changed to self_powered."
+
+              - if:
+                  - condition: template
+                    value_template: "{{ backup_reserve | round(0) != 20 }}"
+                then:
+                  - service: script.efctrl_set_backup_reserve
+                    data:
+                      value: 20
+                  - stop: "EV support active: backup reserve changed to 20%."
+
+              - if:
+                  - condition: template
+                    value_template: >
+                      {{
+                        (current_discharge | float(0) - ev_discharge_power | float(800))
+                        | abs >= discharge_step | float(10)
+                      }}
+                then:
+                  - service: script.efctrl_set_discharge_power
+                    data:
+                      value: "{{ ev_discharge_power | int(800) }}"
+
+          #####################################################################
+          # Charge blocked: stop charging only, keep discharge untouched
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: "{{ target_mode == 'charge_blocked' }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_charge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: 0
+
+              - stop: "Charge blocked by PV gate: charging stopped, discharge untouched."
+
+          #####################################################################
+          # Normal discharge
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: "{{ target_mode == 'discharge' }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_charge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: 0
+                  - stop: "Switching from charge to discharge: charging set to 0 first."
+
+              - if:
+                  - condition: template
+                    value_template: "{{ strategy != 'self_powered' }}"
+                then:
+                  - service: script.efctrl_set_energy_strategy
+                    data:
+                      option: "self_powered"
+                  - stop: "Energy strategy changed to self_powered."
+
+              - if:
+                  - condition: template
+                    value_template: "{{ backup_reserve | round(0) != 20 }}"
+                then:
+                  - service: script.efctrl_set_backup_reserve
+                    data:
+                      value: 20
+                  - stop: "Backup reserve changed to 20%."
+
+              - if:
+                  - condition: template
+                    value_template: >
+                      {{
+                        (target_discharge | float(0) - current_discharge | float(0))
+                        | abs >= discharge_step | float(10)
+                      }}
+                then:
+                  - service: script.efctrl_set_discharge_power
+                    data:
+                      value: "{{ target_discharge | int(0) }}"
+
+          #####################################################################
+          # Normal charge
+          #####################################################################
+          - conditions:
+              - condition: template
+                value_template: "{{ target_mode == 'charge' }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ current_discharge | float(0) > 0 }}"
+                then:
+                  - service: script.efctrl_set_discharge_power
+                    data:
+                      value: 0
+                  - stop: "Switching from discharge to charge: base load set to 0 first."
+
+              - if:
+                  - condition: template
+                    value_template: "{{ strategy != 'scheduled' }}"
+                then:
+                  - service: script.efctrl_set_energy_strategy
+                    data:
+                      option: "scheduled"
+                  - stop: "Energy strategy changed to scheduled."
+
+              - if:
+                  - condition: template
+                    value_template: >
+                      {{
+                        (target_charge | float(0) - current_charge | float(0))
+                        | abs >= charge_step | float(1)
+                      }}
+                then:
+                  - service: script.efctrl_set_charge_power
+                    data:
+                      value: "{{ target_charge | int(0) }}"
+
+        #######################################################################
+        # Default idle
+        #######################################################################
+        default:
+          - if:
+              - condition: template
+                value_template: "{{ current_charge | float(0) > 0 }}"
+            then:
+              - service: script.efctrl_set_charge_power
+                data:
+                  value: 0
+              - stop: "Idle: charging power set to 0."
+
+          - if:
+              - condition: template
+                value_template: "{{ current_discharge | float(0) > 0 }}"
+            then:
+              - service: script.efctrl_set_discharge_power
+                data:
+                  value: 0
+              - stop: "Idle: base load power set to 0."
+
+###############################################################################
+# UTILITY METERS
+###############################################################################
+
+utility_meter:
+  ecoflow_battery_charge_from_pv_daily:
+    source: sensor.ecoflow_battery_charge_from_pv_energy
+    name: "EcoFlow Battery Charge From PV Daily"
+    cycle: daily
+
+  ecoflow_battery_charge_from_grid_daily:
+    source: sensor.ecoflow_battery_charge_from_grid_energy
+    name: "EcoFlow Battery Charge From Grid Daily"
+    cycle: daily
+
+  ecoflow_battery_charge_from_pv_monthly:
+    source: sensor.ecoflow_battery_charge_from_pv_energy
+    name: "EcoFlow Battery Charge From PV Monthly"
+    cycle: monthly
+
+  ecoflow_battery_charge_from_grid_monthly:
+    source: sensor.ecoflow_battery_charge_from_grid_energy
+    name: "EcoFlow Battery Charge From Grid Monthly"
+    cycle: monthly
